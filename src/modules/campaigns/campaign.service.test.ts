@@ -6,7 +6,7 @@ import { campaigns, submissionMetrics, submissions, users } from "@/db/schema";
 import { getCampaignOverview } from "./campaign.service";
 
 describe("getCampaignOverview", () => {
-  it("keeps budget spent fixed when approved submission views increase", async () => {
+  it("calculates budget spent from the latest metric payout", async () => {
     const [creator] = await db
       .insert(users)
       .values({
@@ -18,10 +18,10 @@ describe("getCampaignOverview", () => {
     const [campaign] = await db
       .insert(campaigns)
       .values({
-        title: "Overview payout reservation test",
+        title: "Overview payout test",
         platforms: ["tiktok"],
         payoutPer1kViews: 5,
-        totalBudget: 10,
+        totalBudget: 100,
         status: "active",
         startsAt: new Date("2026-09-01T00:00:00.000Z"),
         endsAt: new Date("2026-09-05T23:59:59.999Z"),
@@ -36,7 +36,7 @@ describe("getCampaignOverview", () => {
         postUrl: `https://tiktok.com/@test/video/${crypto.randomUUID()}`,
         platform: "tiktok",
         status: "approved",
-        approvedPayout: 5,
+        approvedPayout: 0,
       })
       .returning();
 
@@ -61,8 +61,9 @@ describe("getCampaignOverview", () => {
 
     expect(overview).not.toBeNull();
 
-    expect(overview?.spent).toBe(5);
-    expect(overview?.budgetLeft).toBe(5);
+    // floor(13_750 / 1_000) * 5 = 65 cents
+    expect(overview?.spent).toBe(65);
+    expect(overview?.budgetLeft).toBe(35);
     expect(overview?.approvedViews).toBe(13_750);
   });
 });
