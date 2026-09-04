@@ -5,8 +5,6 @@ import { db } from "@/db";
 import { users } from "@/db/schema";
 import { createSessionToken, SESSION_COOKIE } from "@/server/auth/session";
 
-export const dynamic = "force-dynamic";
-
 const isDemoLoginEnabled =
   process.env.NODE_ENV !== "production" ||
   process.env.DEMO_LOGIN_ENABLED === "true";
