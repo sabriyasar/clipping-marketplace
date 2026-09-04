@@ -157,13 +157,22 @@ export async function getCampaignOverview(db: Db, campaignId: string) {
     views: latestViewsBySubmission.get(submission.id) ?? 0,
   }));
 
-  const spent = approvedSubmissions.reduce((total, submission) => {
+  const rawSpent = approvedSubmissions.reduce((total, submission) => {
     const views = latestViewsBySubmission.get(submission.id) ?? 0;
 
     const payout = Math.floor(views / 1000) * campaign.payoutPer1kViews;
 
     return total + payout;
   }, 0);
+
+  // A submission's views keep growing after approval (ingest runs daily),
+  // so the theoretical payout on an approved submission can exceed
+  // total_budget even though the approval-time check passed. We enforce
+  // the "never pays out more than total_budget" invariant here at the
+  // campaign level. See NOTES.md "known limitation" for the root cause
+  // and the more correct fix (freezing payout at approval time, or
+  // stopping ingest once a campaign is completed).
+  const spent = Math.min(rawSpent, campaign.totalBudget);
 
   const approvedViews = approvedRows.reduce(
     (total, row) => total + row.views,

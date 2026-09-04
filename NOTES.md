@@ -104,9 +104,25 @@ The payout calculation is:
 floor(views / 1000) * payout_per_1k_views
 ```
 
-At approval time, the calculated payout is checked against the campaign's remaining reserved budget. An approval fails if the payout would exceed that budget.
+At approval time, the calculated payout is checked against the campaign's remaining reserved budget (based on `approvedPayout` for already-approved submissions). An approval fails if the payout would exceed that budget.
 
-The campaign overview uses the latest metric for each approved submission to calculate current displayed spend and earnings. Budget left is clamped at zero and the campaign is automatically marked as `completed` when the approval-time budget is fully consumed.
+### Known limitation: post-approval view growth vs. the budget cap
+
+The approval-time check only guards the moment of approval. After a submission is approved, `pnpm ingest` keeps increasing its view count every day, and the campaign overview recomputes displayed earnings from the _latest_ metric row for each approved submission. That means the displayed "spent" figure is derived independently from `approvedPayout`, and can in theory keep growing past `total_budget` after approval, even though no single approval was ever allowed to exceed it.
+
+I hit this directly while testing: a campaign with a $0.10 budget and $0.05/1k payout showed **Spent: $0.25** after two ingest runs pushed a single approved submission's views to 5,151. `budgetLeft` was clamped at zero by `Math.max(totalBudget - spent, 0)`, which hid the overrun instead of surfacing it.
+
+I fixed the overview so displayed spend is capped at the campaign's `total_budget`:
+
+```ts
+const spent = Math.min(rawSpent, campaign.totalBudget);
+```
+
+This guarantees the UI-facing invariant ("a campaign never shows itself paying out more than its budget") holds, and is covered by a dedicated test (`getCampaignOverview` — never reports spent above `total_budget`).
+
+This is a display-layer fix, not a root-cause fix. The actual reserved spend used for approval decisions (`approvedPayout`) is unaffected by view growth and was never at risk of exceeding budget. What's undefined is how "earnings" should behave for a creator whose submission keeps racking up views after the campaign is effectively fully paid out. Given another day I'd address this by either freezing a submission's counted views once the campaign's approved budget is exhausted, or excluding submissions from further ingest once the campaign is `completed` — see "What I Would Fix With Another Day."
+
+The campaign overview uses the latest metric for each approved submission to calculate current displayed spend and earnings, capped as described above. Budget left is clamped at zero and the campaign is automatically marked as `completed` when the approval-time budget is fully consumed.
 
 ## Access Control
 
@@ -143,6 +159,8 @@ Views are monotonic and only move upwards.
 
 Submissions are processed independently so a failure for one submission does not prevent the remaining submissions from finishing. Failures are reported after the run.
 
+Note: ingestion currently keeps running for approved submissions regardless of whether the campaign has been marked `completed`. This is what produces the post-approval budget overrun described above. Given another day I would stop ingesting metrics for submissions belonging to a `completed` campaign.
+
 ## What I Left Out
 
 I intentionally kept the implementation focused on the requested marketplace flow.
@@ -164,9 +182,9 @@ These were intentionally left out to keep the implementation small and focused o
 
 ## What I Would Fix With Another Day
 
-The first thing I would improve is the production-readiness of metrics ingestion.
+The first thing I would fix is the post-approval view growth issue described above: stop ingesting metrics for submissions in a `completed` campaign (or freeze counted views once a submission's payout share of the budget is fully reserved), so displayed spend and creator earnings never need a defensive cap.
 
-I would move ingestion to a background job system with retries, explicit ingestion-run records, structured failure reporting, and handling for external API rate limits and transient failures.
+After that, I would improve the production-readiness of metrics ingestion generally: move it to a background job system with retries, explicit ingestion-run records, structured failure reporting, and handling for external API rate limits and transient failures.
 
 I would also expand the integration-test coverage against a real Postgres instance, particularly around transaction and locking behavior.
 
@@ -185,6 +203,8 @@ I did not treat generated code as authoritative. I manually reviewed and correct
 - idempotent metrics ingestion
 - TypeScript and ESLint issues
 
+I also found, while manually testing the running app, that the campaign overview's displayed "spent" could exceed `total_budget` after post-approval view growth (a $0.10 budget campaign showing $0.25 spent). This was not something AI tooling flagged on its own; I caught it by exercising the UI, then used AI assistance to help implement and test the fix (capping displayed spend at `total_budget` and adding a regression test), and wrote up the remaining root cause in "Known limitation" above rather than treating the cap as a full fix.
+
 The final implementation was manually verified with:
 
 ```bash
@@ -198,5 +218,5 @@ Current local verification:
 
 - ESLint: 0 errors, 0 warnings
 - TypeScript: passing
-- Vitest: 14/14 tests passing
+- Vitest: 15/15 tests passing
 - Production build: passing
