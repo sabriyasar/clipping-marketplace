@@ -1,12 +1,12 @@
 import { and, asc, desc, eq, gt, ilike, lt, sql } from "drizzle-orm";
 
-import { campaigns, submissionMetrics, submissions } from "@/db/schema";
 import type { TRPCContext } from "@/server/trpc/context";
+import { campaigns, submissionMetrics, submissions } from "@/db/schema";
 
 import {
-  type CampaignListInput,
   type CreateCampaignInput,
   type UpdateCampaignInput,
+  type CampaignListInput,
 } from "./campaign.validation";
 
 type Db = TRPCContext["db"];
@@ -135,16 +135,6 @@ export async function getCampaignOverview(db: Db, campaignId: string) {
     )
     .orderBy(asc(submissionMetrics.capturedAt));
 
-  /*
-   * Approved views are always taken from the most recent metric row.
-   *
-   * This is intentionally separate from campaign spend:
-   * - views are live/current metrics
-   * - spend is the payout reserved when the submission was approved
-   *
-   * This prevents later metric growth from changing the amount already
-   * reserved against the campaign budget.
-   */
   const latestViewsBySubmission = new Map<string, number>();
   const latestDateBySubmission = new Map<string, string>();
 
@@ -167,28 +157,19 @@ export async function getCampaignOverview(db: Db, campaignId: string) {
     views: latestViewsBySubmission.get(submission.id) ?? 0,
   }));
 
-  /*
-   * Campaign spend is based on the payout reserved at approval time.
-   *
-   * approveSubmission() calculates the payout from the latest metric
-   * available at approval and persists it in approvedPayout. Using the
-   * same value here keeps campaign budget accounting consistent with
-   * the concurrency/budget checks performed during approval.
-   */
-  const spent = approvedSubmissions.reduce(
-    (total, submission) => total + (submission.approvedPayout ?? 0),
-    0,
-  );
+  const spent = approvedSubmissions.reduce((total, submission) => {
+    const views = latestViewsBySubmission.get(submission.id) ?? 0;
+
+    const payout = Math.floor(views / 1000) * campaign.payoutPer1kViews;
+
+    return total + payout;
+  }, 0);
 
   const approvedViews = approvedRows.reduce(
     (total, row) => total + row.views,
     0,
   );
 
-  /*
-   * Daily views are based on the captured metric rows and include every
-   * day in the campaign range, even when there is no metric for that day.
-   */
   const dailyViewsMap = new Map<string, number>();
 
   const campaignStartDate = campaign.startsAt.toISOString().slice(0, 10);
