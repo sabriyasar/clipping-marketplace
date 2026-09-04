@@ -67,14 +67,23 @@ I handle approval inside a database transaction and lock the campaign row with `
 The approval flow is:
 
 1. Load the submission and verify that it is still `pending`.
+
 2. Lock the associated campaign row.
+
 3. Read the latest submission metric.
-4. Calculate the payout using:
+
+4. Calculate the approval payout using:
+
    `floor(views / 1000) * payout_per_1k_views`
+
 5. Calculate already reserved campaign spend from `approvedPayout` on approved submissions.
+
 6. Compare the new payout with the remaining budget.
+
 7. Approve the submission and store its calculated payout in `approvedPayout`.
+
 8. If the budget is fully consumed, mark the campaign as `completed`.
+
 9. Commit the transaction.
 
 Because the campaign row is locked for the duration of the transaction, concurrent approvals for the same campaign are serialized.
@@ -83,21 +92,21 @@ If only enough budget remains for one approval, the first transaction that obtai
 
 I considered a normal read/check/update flow without row locking, but ruled it out because it cannot guarantee the budget invariant under concurrent approvals.
 
-`approvedPayout` represents the budget reservation captured at approval time. Later metric growth changes the displayed earnings calculation, but does not retroactively increase the amount reserved against the campaign budget.
+`approvedPayout` stores the payout calculated at approval time and is used as the approval-time budget reservation. Separately, the campaign overview calculates current displayed spend and creator earnings from the latest available metric for approved submissions. This keeps the approval concurrency invariant while allowing the overview to reflect current view-based earnings.
 
 ## Payout and Budget
 
 All monetary values are stored as integer cents.
 
-Payout is calculated from the latest metric:
+The payout calculation is:
 
 ```text
 floor(views / 1000) * payout_per_1k_views
 ```
 
-An approval fails if the calculated payout would exceed the campaign's remaining budget.
+At approval time, the calculated payout is checked against the campaign's remaining reserved budget. An approval fails if the payout would exceed that budget.
 
-When the budget is fully consumed, the campaign is automatically marked as `completed`.
+The campaign overview uses the latest metric for each approved submission to calculate current displayed spend and earnings. Budget left is clamped at zero and the campaign is automatically marked as `completed` when the approval-time budget is fully consumed.
 
 ## Access Control
 
