@@ -2,12 +2,17 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 
 import { db } from "@/db";
+import { users } from "@/db/schema";
 import { createSessionToken, SESSION_COOKIE } from "@/server/auth/session";
+
+const isDemoLoginEnabled =
+  process.env.NODE_ENV !== "production" ||
+  process.env.DEMO_LOGIN_ENABLED === "true";
 
 async function loginAs(formData: FormData) {
   "use server";
 
-  if (process.env.NODE_ENV === "production") {
+  if (!isDemoLoginEnabled) {
     redirect("/");
   }
 
@@ -32,7 +37,7 @@ async function loginAs(formData: FormData) {
   cookieStore.set(SESSION_COOKIE, token, {
     httpOnly: true,
     sameSite: "lax",
-    secure: false,
+    secure: process.env.NODE_ENV === "production",
     path: "/",
     maxAge: 60 * 60 * 24 * 7,
   });
@@ -41,18 +46,18 @@ async function loginAs(formData: FormData) {
 }
 
 export default async function DevLoginPage() {
-  if (process.env.NODE_ENV === "production") {
+  if (!isDemoLoginEnabled) {
     return null;
   }
 
-  const users = await db.select().from((await import("@/db/schema")).users);
+  const userList = await db.select().from(users);
 
   return (
     <main className="mx-auto max-w-md p-8">
       <h1 className="mb-6 text-2xl font-semibold">Development Login</h1>
 
       <div className="space-y-4">
-        {users.map((user) => (
+        {userList.map((user) => (
           <form action={loginAs} key={user.id}>
             <input type="hidden" name="userId" value={user.id} />
 
