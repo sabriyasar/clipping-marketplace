@@ -1,36 +1,178 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Clipping Marketplace
+
+A full-stack creator marketplace built as a take-home assignment.
+
+The application allows admins to create and manage campaigns, review creator submissions, approve or reject submissions, and track campaign budgets. Creators can browse active campaigns, submit social media posts, and monitor their submission status and estimated earnings.
+
+## Tech Stack
+
+- Next.js 15 App Router
+- React 19
+- TypeScript
+- tRPC v11
+- Drizzle ORM
+- PostgreSQL
+- Tailwind CSS
+- shadcn/ui
+- React Hook Form
+- Zod
+- Vitest
+
+## Features
+
+### Admin
+
+- Campaign list with pagination
+- Campaign title search
+- Campaign status filtering
+- Campaign creation and editing
+- Campaign overview
+- Submission review
+- Approve/reject workflow
+- Budget tracking
+- Approved views and earnings
+- Daily views chart
+- Automatic campaign completion when the budget is exhausted
+
+### Creator
+
+- Browse active campaigns
+- View campaign details
+- Submit supported social media post URLs
+- Duplicate submission protection
+- View personal submissions
+- View latest views
+- View estimated earnings
+- Track submission status
+
+### Metrics Ingestion
+
+The project includes a simulated daily metrics ingestion command:
+
+```bash
+pnpm ingest
+```
+
+The ingestion process is idempotent, keeps views monotonic, maintains one metric per submission/day, and isolates failures between submissions.
+
+### Budget Safety
+
+Submission approval is performed inside a database transaction with a row lock on the campaign.
+
+This serializes concurrent approvals for the same campaign and prevents approved payouts from exceeding the available campaign budget.
+
+The payout formula is:
+
+```text
+floor(views / 1000) * payout_per_1k_views
+```
 
 ## Getting Started
 
-First, run the development server:
+### Requirements
+
+- Node.js 20+
+- pnpm
+- Docker
+
+### 1. Install dependencies
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+pnpm install
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+### 2. Start PostgreSQL
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+```bash
+docker compose up -d
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+### 3. Configure environment variables
 
-## Learn More
+Create a local `.env` file with the database connection string expected by the application and Drizzle configuration.
 
-To learn more about Next.js, take a look at the following resources:
+### 4. Run database migrations
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+```bash
+pnpm drizzle-kit migrate
+```
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+### 5. Seed the database
 
-## Deploy on Vercel
+```bash
+pnpm db:seed
+```
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+### 6. Start the development server
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+```bash
+pnpm dev
+```
+
+Open:
+
+```text
+http://localhost:3000
+```
+
+The application uses signed cookie authentication with a development-only user switcher instead of a production authentication provider.
+
+## Development Commands
+
+```bash
+pnpm dev
+pnpm lint
+pnpm typecheck
+pnpm test
+pnpm build
+pnpm ingest
+```
+
+## Tests
+
+The project includes tests covering:
+
+- Payout calculation
+- Campaign budget ceiling
+- Concurrent approval behavior
+- Submission access control
+- Duplicate submission protection
+- Metrics ingestion idempotency
+
+Current test status:
+
+```text
+14/14 tests passing
+```
+
+## Database
+
+Drizzle migrations are committed under:
+
+```text
+drizzle/
+```
+
+PostgreSQL can be started locally using the included Docker Compose configuration.
+
+## Documentation
+
+Additional implementation notes, including the concurrent approval strategy, access-control decisions, intentional omissions, future improvements, and AI tooling usage are available in:
+
+```text
+NOTES.md
+```
+
+## Intentional Scope
+
+This project intentionally does not include:
+
+- Production authentication
+- Real social-media API integrations
+- Real payment processing
+- Background job infrastructure
+- Notifications
+- Fraud detection
+- Production moderation workflows
+
+These were kept outside the scope of the take-home implementation so the core marketplace and budget-safety flows could remain focused and testable.
