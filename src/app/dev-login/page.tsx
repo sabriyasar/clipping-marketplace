@@ -5,6 +5,13 @@ import { db } from "@/db";
 import { users } from "@/db/schema";
 import { createSessionToken, SESSION_COOKIE } from "@/server/auth/session";
 
+// This page reads the live user list on every request. Without this,
+// Next.js prerenders it once at build time and serves a stale snapshot
+// from the CDN until the next deploy, which made dev/test-only users
+// appear to "come back" after a refresh even though they'd been
+// deleted from the database.
+export const dynamic = "force-dynamic";
+
 const isDemoLoginEnabled =
   process.env.NODE_ENV !== "production" ||
   process.env.DEMO_LOGIN_ENABLED === "true";

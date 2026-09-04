@@ -189,6 +189,41 @@ After that, I would improve the production-readiness of metrics ingestion genera
 
 I would also expand the integration-test coverage against a real Postgres instance, particularly around transaction and locking behavior, and around `allocateBudget` with multiple competing submissions in the same campaign.
 
+## Local/Production Environment Mixup (caught and fixed)
+
+While debugging a seemingly unrelated issue — several test suites timing
+out only on transaction-heavy code paths (`approveSubmission`, `runIngest`)
+— I traced it back to `src/db/index.ts` calling bare `dotenv/config`, which
+only loads `.env` and does not respect Next.js's `.env.local` override
+precedence. As a result, the test runner was connecting to the **remote
+Supabase project** referenced in `.env` instead of the local Postgres
+instance in `.env.local`. Transaction-heavy tests, which hold a connection
+open across several round trips, crossed the 5s test timeout over that
+network path; single-query tests happened to stay under it, which is why
+only some tests failed.
+
+Fix: load `.env.local` before `.env` in `src/db/index.ts`, and set an
+explicit `connectionTimeoutMillis` on the `pg` pool so a future
+connectivity problem fails fast with a clear error instead of hanging
+until the test runner's own timeout.
+
+Because of this, some earlier local test runs had briefly written
+UUID-suffixed fixture rows (e.g. `test-*@example.com`, `ingest-*@example.com`)
+into the remote database instead of the local one. I found this by
+opening the `/dev-login` page against production and seeing dozens of
+unexpected accounts. I ran a one-off cleanup query against production to
+remove the leaked fixture rows, matched by the exact email prefixes each
+test file generates (`test-`, `ingest-`, `overview-`, `payout-reservation-`,
+`creator-a-`, `creator-b-`, `reject-`, `earnings-consistency-`), and
+verified `select count(*)` before deleting.
+
+Separately, I noticed the `/dev-login` list appeared to "revert" after
+a refresh even after that cleanup. That page had no `dynamic` export, so
+Next.js prerendered it once at build time and Vercel served that static
+snapshot from cache; it only showed the current database state right
+after a fresh deploy. I added `export const dynamic = "force-dynamic"`
+so it always reflects the live user table.
+
 ## AI Tooling
 
 I used AI tooling as a development aid for implementation, debugging, test-case exploration, and reviewing edge cases.
@@ -206,7 +241,7 @@ I did not treat generated code as authoritative. I manually reviewed and correct
 
 I also found, while manually testing the running app, that the campaign overview's displayed "spent" could exceed `total_budget` after post-approval view growth (a $0.10 budget campaign showing $0.25 spent), and that a submission's own displayed "Earnings" disagreed with the campaign overview's total (both showing $0.25 independently, from two different code paths). Neither of these was something AI tooling flagged on its own; I caught both by exercising the running UI. I then used AI assistance to help implement and test the fix: extracting a single `allocateBudget` function used by both the campaign overview and the submission list queries, so displayed spend and per-submission earnings are always derived from the same allocation and never exceed budget. I wrote up the remaining root cause (ingestion not stopping on campaign completion) in "Known limitation" above rather than treating this as a full fix.
 
-The final implementation was manually verified with:
+The final implementation was manually verified, after the `.env.local` fix described above was in place, with:
 
 ```bash
 pnpm lint
@@ -219,5 +254,5 @@ Current local verification:
 
 - ESLint: 0 errors, 0 warnings
 - TypeScript: passing
-- Vitest: 15/15 tests passing
+- Vitest: 21/21 tests passing
 - Production build: passing
