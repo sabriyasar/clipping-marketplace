@@ -2,13 +2,13 @@
 
 A full-stack creator marketplace built as a take-home assignment.
 
-The application allows admins to create and manage campaigns, review creator submissions, approve or reject submissions, and track campaign budgets. Creators can browse active campaigns, submit social media posts, and monitor their submission status and estimated earnings.
+The application allows admins to create and manage paid clipping campaigns, review creator submissions, approve or reject submissions, and track campaign budgets. Creators can browse active campaigns, submit social media posts, and monitor submission status and estimated earnings.
 
 ## Tech Stack
 
 - Next.js 15 App Router
 - React 19
-- TypeScript
+- TypeScript (strict mode)
 - tRPC v11
 - Drizzle ORM
 - PostgreSQL
@@ -22,16 +22,16 @@ The application allows admins to create and manage campaigns, review creator sub
 
 ### Admin
 
-- Campaign list with pagination
+- Campaign list with server-side pagination
 - Campaign title search
 - Campaign status filtering
 - Campaign creation and editing
 - Campaign overview
-- Submission review
+- Submission review queue
 - Approve/reject workflow
 - Budget tracking
-- Approved views and earnings
-- Daily views chart
+- Approved views and current earnings
+- Daily views chart across the campaign period
 - Automatic campaign completion when the budget is exhausted
 
 ### Creator
@@ -53,7 +53,13 @@ The project includes a simulated daily metrics ingestion command:
 pnpm ingest
 ```
 
-The ingestion process is idempotent, keeps views monotonic, maintains one metric per submission/day, and isolates failures between submissions.
+The ingestion process:
+
+- Is idempotent for the same submission/day
+- Maintains one metric row per submission/day
+- Keeps view counts monotonic
+- Processes submissions independently so one failure does not stop the entire run
+- Reports failures after the run
 
 ### Budget Safety
 
@@ -66,6 +72,8 @@ The payout formula is:
 ```text
 floor(views / 1000) * payout_per_1k_views
 ```
+
+All monetary values are stored as integer cents.
 
 ## Getting Started
 
@@ -89,7 +97,16 @@ docker compose up -d
 
 ### 3. Configure environment variables
 
-Create a local `.env` file with the database connection string expected by the application and Drizzle configuration.
+Create a local `.env.local` file:
+
+```env
+DATABASE_URL="postgresql://postgres:postgres@localhost:5434/clipping_marketplace"
+SESSION_SECRET="your-local-development-secret"
+```
+
+Do not commit environment files or secrets to the repository.
+
+For production, configure `DATABASE_URL` and `SESSION_SECRET` through the hosting provider's environment variables.
 
 ### 4. Run database migrations
 
@@ -115,7 +132,7 @@ Open:
 http://localhost:3000
 ```
 
-The application uses signed cookie authentication with a development-only user switcher instead of a production authentication provider.
+The application uses signed-cookie authentication with a development-only user switcher instead of a production authentication provider, as requested.
 
 ## Development Commands
 
@@ -130,7 +147,7 @@ pnpm ingest
 
 ## Tests
 
-The project includes tests covering:
+The test suite covers the areas most likely to affect correctness:
 
 - Payout calculation
 - Campaign budget ceiling
@@ -145,9 +162,15 @@ Current test status:
 14/14 tests passing
 ```
 
+The full verification command is:
+
+```bash
+pnpm lint && pnpm typecheck && pnpm test && pnpm build
+```
+
 ## Database
 
-Drizzle migrations are committed under:
+Drizzle migrations are generated with `drizzle-kit` and committed under:
 
 ```text
 drizzle/
@@ -157,7 +180,18 @@ PostgreSQL can be started locally using the included Docker Compose configuratio
 
 ## Documentation
 
-Additional implementation notes, including the concurrent approval strategy, access-control decisions, intentional omissions, future improvements, and AI tooling usage are available in:
+Additional implementation notes covering:
+
+- Concurrent approval handling
+- Payout and budget behavior
+- Access-control decisions
+- Submission validation
+- Metrics ingestion
+- Intentional omissions
+- Future improvements
+- AI tooling usage
+
+are available in:
 
 ```text
 NOTES.md
@@ -168,11 +202,13 @@ NOTES.md
 This project intentionally does not include:
 
 - Production authentication
-- Real social-media API integrations
+- Real TikTok, Instagram, or YouTube API integrations
 - Real payment processing
 - Background job infrastructure
 - Notifications
+- Creator profiles
+- Advanced analytics
 - Fraud detection
-- Production moderation workflows
+- Production-grade moderation workflows
 
-These were kept outside the scope of the take-home implementation so the core marketplace and budget-safety flows could remain focused and testable.
+These were intentionally kept outside the scope of the take-home assignment so the core marketplace, access-control, ingestion, and budget-safety flows could remain small, focused, and testable.
