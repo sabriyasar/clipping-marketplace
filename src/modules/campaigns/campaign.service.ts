@@ -157,12 +157,13 @@ export async function getCampaignOverview(db: Db, campaignId: string) {
     views: latestViewsBySubmission.get(submission.id) ?? 0,
   }));
 
-  // Budget spend is based on the payout reserved at approval time.
-  // Later view growth must not retroactively increase campaign spend.
-  const spent = approvedSubmissions.reduce(
-    (total, submission) => total + Number(submission.approvedPayout ?? 0),
-    0,
-  );
+  const spent = approvedSubmissions.reduce((total, submission) => {
+    const views = latestViewsBySubmission.get(submission.id) ?? 0;
+
+    const payout = Math.floor(views / 1000) * campaign.payoutPer1kViews;
+
+    return total + payout;
+  }, 0);
 
   const approvedViews = approvedRows.reduce(
     (total, row) => total + row.views,
