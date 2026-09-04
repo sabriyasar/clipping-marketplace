@@ -44,6 +44,18 @@ function isValidPlatformUrl(
   }
 }
 
+function calculateSubmissionEarnings(
+  status: "pending" | "approved" | "rejected" | "paid",
+  views: number,
+  payoutPer1kViews: number,
+) {
+  if (status !== "approved" && status !== "paid") {
+    return 0;
+  }
+
+  return calculatePayout(views, payoutPer1kViews);
+}
+
 export async function createSubmission(
   db: Db,
   creatorId: string,
@@ -149,11 +161,19 @@ export async function listMySubmissions(db: Db, creatorId: string) {
     .where(eq(submissions.creatorId, creatorId))
     .orderBy(desc(submissions.createdAt));
 
-  return rows.map((row) => ({
-    ...row,
-    views: Number(row.views),
-    earnings: calculatePayout(Number(row.views), row.payoutPer1kViews),
-  }));
+  return rows.map((row) => {
+    const views = Number(row.views);
+
+    return {
+      ...row,
+      views,
+      earnings: calculateSubmissionEarnings(
+        row.status,
+        views,
+        row.payoutPer1kViews,
+      ),
+    };
+  });
 }
 
 export async function listSubmissionsByCampaign(db: Db, campaignId: string) {
@@ -184,11 +204,19 @@ export async function listSubmissionsByCampaign(db: Db, campaignId: string) {
     .where(eq(submissions.campaignId, campaignId))
     .orderBy(desc(submissions.createdAt));
 
-  return rows.map((row) => ({
-    ...row,
-    views: Number(row.views),
-    earnings: calculatePayout(Number(row.views), row.payoutPer1kViews),
-  }));
+  return rows.map((row) => {
+    const views = Number(row.views);
+
+    return {
+      ...row,
+      views,
+      earnings: calculateSubmissionEarnings(
+        row.status,
+        views,
+        row.payoutPer1kViews,
+      ),
+    };
+  });
 }
 
 export async function approveSubmission(db: Db, submissionId: string) {
@@ -217,8 +245,10 @@ export async function approveSubmission(db: Db, submissionId: string) {
       });
     }
 
-    // Lock the campaign row so concurrent approvals for the same
-    // campaign are serialized.
+    /*
+     * Lock the campaign row so concurrent approvals for the same
+     * campaign are serialized by Postgres.
+     */
     const [campaign] = await tx
       .select()
       .from(campaigns)
@@ -251,13 +281,16 @@ export async function approveSubmission(db: Db, submissionId: string) {
 
     const views = latestMetric?.views ?? 0;
 
+    /*
+     * The payout is calculated from the most recent metric at the
+     * moment of approval.
+     *
+     * approvedPayout is persisted as the amount reserved against the
+     * campaign budget. Later metric growth must not retroactively
+     * increase the campaign's reserved spend.
+     */
     const payout = calculatePayout(views, campaign.payoutPer1kViews);
 
-    /*
-     * Approved payout is a budget reservation captured at approval time.
-     * Later metric growth affects displayed earnings, but does not
-     * retroactively increase the campaign's already reserved spend.
-     */
     const approvedSubmissions = await tx
       .select({
         approvedPayout: submissions.approvedPayout,
@@ -308,7 +341,7 @@ export async function approveSubmission(db: Db, submissionId: string) {
     }
 
     const newSpent = spent + payout;
-    const budgetLeft = campaign.totalBudget - newSpent;
+    const budgetLeft = Math.max(campaign.totalBudget - newSpent, 0);
 
     if (newSpent >= campaign.totalBudget) {
       await tx
