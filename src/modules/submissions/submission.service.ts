@@ -8,7 +8,7 @@ import { campaigns, submissionMetrics, submissions, users } from "@/db/schema";
 
 import type { CreateSubmissionInput } from "./submission.validation";
 
-import { calculatePayout } from "../campaigns/payout";
+import { allocateBudget, calculatePayout } from "../campaigns/payout";
 
 type Db = TRPCContext["db"];
 
@@ -41,19 +41,60 @@ function isValidPlatformUrl(
         hostname === "youtu.be" ||
         hostname.endsWith(".youtube.com")
       );
+
+    default:
+      return false;
   }
 }
 
-function calculateSubmissionEarnings(
-  status: "pending" | "approved" | "rejected" | "paid",
-  views: number,
-  payoutPer1kViews: number,
-) {
-  if (status !== "approved" && status !== "paid") {
-    return 0;
+/**
+ * Groups rows by campaign and allocates each campaign's budget across
+ * its approved/paid submissions using the shared allocateBudget logic,
+ * so displayed earnings here always agree with the campaign overview's
+ * "Spent" figure.
+ */
+function allocateEarningsAcrossCampaigns<
+  T extends {
+    id: string;
+    campaignId: string;
+    status: "pending" | "approved" | "rejected" | "paid";
+    views: number;
+    payoutPer1kViews: number;
+    totalBudget: number;
+    updatedAt: Date;
+  },
+>(rows: T[]): Map<string, number> {
+  const earningsById = new Map<string, number>();
+
+  const byCampaign = new Map<string, T[]>();
+
+  for (const row of rows) {
+    const list = byCampaign.get(row.campaignId) ?? [];
+    list.push(row);
+    byCampaign.set(row.campaignId, list);
   }
 
-  return calculatePayout(views, payoutPer1kViews);
+  for (const campaignRows of byCampaign.values()) {
+    const firstRow = campaignRows[0];
+
+    if (!firstRow) {
+      continue;
+    }
+
+    const { totalBudget, payoutPer1kViews } = firstRow;
+
+    const allocated = allocateBudget(
+      campaignRows,
+      totalBudget,
+      payoutPer1kViews,
+    );
+
+    for (const [id, payout] of allocated) {
+      earningsById.set(id, payout);
+    }
+  }
+
+  return earningsById;
 }
 
 export async function createSubmission(
@@ -142,6 +183,7 @@ export async function listMySubmissions(db: Db, creatorId: string) {
       campaignId: submissions.campaignId,
       campaignTitle: campaigns.title,
       payoutPer1kViews: campaigns.payoutPer1kViews,
+      totalBudget: campaigns.totalBudget,
       postUrl: submissions.postUrl,
       platform: submissions.platform,
       status: submissions.status,
@@ -161,19 +203,17 @@ export async function listMySubmissions(db: Db, creatorId: string) {
     .where(eq(submissions.creatorId, creatorId))
     .orderBy(desc(submissions.createdAt));
 
-  return rows.map((row) => {
-    const views = Number(row.views);
+  const normalizedRows = rows.map((row) => ({
+    ...row,
+    views: Number(row.views),
+  }));
 
-    return {
-      ...row,
-      views,
-      earnings: calculateSubmissionEarnings(
-        row.status,
-        views,
-        row.payoutPer1kViews,
-      ),
-    };
-  });
+  const earningsById = allocateEarningsAcrossCampaigns(normalizedRows);
+
+  return normalizedRows.map((row) => ({
+    ...row,
+    earnings: earningsById.get(row.id) ?? 0,
+  }));
 }
 
 export async function listSubmissionsByCampaign(db: Db, campaignId: string) {
@@ -184,6 +224,7 @@ export async function listSubmissionsByCampaign(db: Db, campaignId: string) {
       creatorId: submissions.creatorId,
       creatorEmail: users.email,
       payoutPer1kViews: campaigns.payoutPer1kViews,
+      totalBudget: campaigns.totalBudget,
       postUrl: submissions.postUrl,
       platform: submissions.platform,
       status: submissions.status,
@@ -204,19 +245,17 @@ export async function listSubmissionsByCampaign(db: Db, campaignId: string) {
     .where(eq(submissions.campaignId, campaignId))
     .orderBy(desc(submissions.createdAt));
 
-  return rows.map((row) => {
-    const views = Number(row.views);
+  const normalizedRows = rows.map((row) => ({
+    ...row,
+    views: Number(row.views),
+  }));
 
-    return {
-      ...row,
-      views,
-      earnings: calculateSubmissionEarnings(
-        row.status,
-        views,
-        row.payoutPer1kViews,
-      ),
-    };
-  });
+  const earningsById = allocateEarningsAcrossCampaigns(normalizedRows);
+
+  return normalizedRows.map((row) => ({
+    ...row,
+    earnings: earningsById.get(row.id) ?? 0,
+  }));
 }
 
 export async function approveSubmission(db: Db, submissionId: string) {
