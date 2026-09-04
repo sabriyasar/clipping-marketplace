@@ -92,7 +92,7 @@ If only enough budget remains for one approval, the first transaction that obtai
 
 I considered a normal read/check/update flow without row locking, but ruled it out because it cannot guarantee the budget invariant under concurrent approvals.
 
-`approvedPayout` stores the payout calculated at approval time and is used as the approval-time budget reservation. Separately, the campaign overview calculates current displayed spend and creator earnings from the latest available metric for approved submissions. This keeps the approval concurrency invariant while allowing the overview to reflect current view-based earnings.
+`approvedPayout` stores the payout calculated at approval time and is used as the approval-time budget reservation. Separately, the campaign overview and submission lists calculate current displayed spend and creator earnings from the latest available metric for approved submissions, using a shared allocation function (see below) so that reservation and display stay aligned.
 
 ## Payout and Budget
 
@@ -106,23 +106,24 @@ floor(views / 1000) * payout_per_1k_views
 
 At approval time, the calculated payout is checked against the campaign's remaining reserved budget (based on `approvedPayout` for already-approved submissions). An approval fails if the payout would exceed that budget.
 
-### Known limitation: post-approval view growth vs. the budget cap
+### Known limitation, and the fix: post-approval view growth vs. the budget cap
 
-The approval-time check only guards the moment of approval. After a submission is approved, `pnpm ingest` keeps increasing its view count every day, and the campaign overview recomputes displayed earnings from the _latest_ metric row for each approved submission. That means the displayed "spent" figure is derived independently from `approvedPayout`, and can in theory keep growing past `total_budget` after approval, even though no single approval was ever allowed to exceed it.
+The approval-time check only guards the moment of approval. After a submission is approved, `pnpm ingest` keeps increasing its view count every day. Both the campaign overview and the creator/admin submission lists originally recomputed displayed earnings independently from the _latest_ metric row for each approved submission, with no shared cap. That meant the displayed numbers could keep growing past `total_budget` after approval, even though no single approval was ever allowed to exceed it.
 
-I hit this directly while testing: a campaign with a $0.10 budget and $0.05/1k payout showed **Spent: $0.25** after two ingest runs pushed a single approved submission's views to 5,151. `budgetLeft` was clamped at zero by `Math.max(totalBudget - spent, 0)`, which hid the overrun instead of surfacing it.
+I hit this directly while testing: a campaign with a $0.10 budget and $0.05/1k payout showed **Spent: $0.25** on the campaign overview after ingest pushed a single approved submission's views to 5,151, and the submission's own "Earnings" column separately showed **$0.25** as well — two different code paths, both wrong, and inconsistent with each other on top of that.
 
-I fixed the overview so displayed spend is capped at the campaign's `total_budget`:
+The root cause was that `campaign.service.ts` (overview) and `submission.service.ts` (submission lists) each computed payout independently from raw views, with no shared budget ceiling. My first pass capped the overview's total with `Math.min(rawSpent, totalBudget)`, but that only fixed the aggregate number on one page — it didn't fix the per-submission earnings shown elsewhere, and it wouldn't have generalized correctly to a campaign with multiple approved submissions competing for the same remaining budget.
 
-```ts
-const spent = Math.min(rawSpent, campaign.totalBudget);
-```
+The actual fix: a single `allocateBudget` function in `src/modules/campaigns/payout.ts` is now the one place that turns "raw payout per submission" into "budget actually attributed to that submission." It walks a campaign's approved/paid submissions in approval order (first-come-first-served, per spec, approximated by `updatedAt`) and caps the running total at `total_budget`. Both the campaign overview (`getCampaignOverview`) and the submission list queries (`listMySubmissions`, `listSubmissionsByCampaign`) call this same function, so:
 
-This guarantees the UI-facing invariant ("a campaign never shows itself paying out more than its budget") holds, and is covered by a dedicated test (`getCampaignOverview` — never reports spent above `total_budget`).
+- the campaign overview's "Spent" is the sum of what `allocateBudget` attributes to each approved submission in that campaign
+- each submission's displayed "Earnings" is exactly its own entry from that same allocation
 
-This is a display-layer fix, not a root-cause fix. The actual reserved spend used for approval decisions (`approvedPayout`) is unaffected by view growth and was never at risk of exceeding budget. What's undefined is how "earnings" should behave for a creator whose submission keeps racking up views after the campaign is effectively fully paid out. Given another day I'd address this by either freezing a submission's counted views once the campaign's approved budget is exhausted, or excluding submissions from further ingest once the campaign is `completed` — see "What I Would Fix With Another Day."
+These two numbers can now never disagree, and neither can exceed `total_budget`. This is covered by a dedicated regression test on `getCampaignOverview` (spent never exceeds `total_budget` even after post-approval view growth).
 
-The campaign overview uses the latest metric for each approved submission to calculate current displayed spend and earnings, capped as described above. Budget left is clamped at zero and the campaign is automatically marked as `completed` when the approval-time budget is fully consumed.
+This is still a display-layer fix, not a root-cause fix. The actual reserved spend used for approval decisions (`approvedPayout`) is unaffected by view growth and was never at risk of exceeding budget — the bug only affected what was _displayed_ after the fact. What's still unresolved is the underlying question of how a creator's "earnings" should behave once their submission keeps racking up views after the campaign is effectively fully paid out — right now they simply stop being credited once the campaign's budget is exhausted, silently. Given another day I'd address this by either freezing a submission's counted views once the campaign's approved budget is exhausted, or excluding submissions from further ingest once the campaign is `completed` — see "What I Would Fix With Another Day."
+
+Budget left is clamped at zero and the campaign is automatically marked as `completed` when the approval-time budget is fully consumed (based on `approvedPayout`, independent of the display allocation above).
 
 ## Access Control
 
@@ -159,7 +160,7 @@ Views are monotonic and only move upwards.
 
 Submissions are processed independently so a failure for one submission does not prevent the remaining submissions from finishing. Failures are reported after the run.
 
-Note: ingestion currently keeps running for approved submissions regardless of whether the campaign has been marked `completed`. This is what produces the post-approval budget overrun described above. Given another day I would stop ingesting metrics for submissions belonging to a `completed` campaign.
+Note: ingestion currently keeps running for approved submissions regardless of whether the campaign has been marked `completed`. This is what produces the post-approval view growth described above. The display-side allocation fix means this no longer produces a budget overrun in the UI, but it does mean views keep accumulating on a submission whose earnings are already capped, with no further effect. Given another day I would stop ingesting metrics for submissions belonging to a `completed` campaign.
 
 ## What I Left Out
 
@@ -182,11 +183,11 @@ These were intentionally left out to keep the implementation small and focused o
 
 ## What I Would Fix With Another Day
 
-The first thing I would fix is the post-approval view growth issue described above: stop ingesting metrics for submissions in a `completed` campaign (or freeze counted views once a submission's payout share of the budget is fully reserved), so displayed spend and creator earnings never need a defensive cap.
+The first thing I would fix is stopping metrics ingestion for submissions in a `completed` campaign (or freezing counted views once a submission's payout share of the budget is fully reserved), so views stop accumulating pointlessly once a campaign's budget is exhausted.
 
 After that, I would improve the production-readiness of metrics ingestion generally: move it to a background job system with retries, explicit ingestion-run records, structured failure reporting, and handling for external API rate limits and transient failures.
 
-I would also expand the integration-test coverage against a real Postgres instance, particularly around transaction and locking behavior.
+I would also expand the integration-test coverage against a real Postgres instance, particularly around transaction and locking behavior, and around `allocateBudget` with multiple competing submissions in the same campaign.
 
 ## AI Tooling
 
@@ -203,7 +204,7 @@ I did not treat generated code as authoritative. I manually reviewed and correct
 - idempotent metrics ingestion
 - TypeScript and ESLint issues
 
-I also found, while manually testing the running app, that the campaign overview's displayed "spent" could exceed `total_budget` after post-approval view growth (a $0.10 budget campaign showing $0.25 spent). This was not something AI tooling flagged on its own; I caught it by exercising the UI, then used AI assistance to help implement and test the fix (capping displayed spend at `total_budget` and adding a regression test), and wrote up the remaining root cause in "Known limitation" above rather than treating the cap as a full fix.
+I also found, while manually testing the running app, that the campaign overview's displayed "spent" could exceed `total_budget` after post-approval view growth (a $0.10 budget campaign showing $0.25 spent), and that a submission's own displayed "Earnings" disagreed with the campaign overview's total (both showing $0.25 independently, from two different code paths). Neither of these was something AI tooling flagged on its own; I caught both by exercising the running UI. I then used AI assistance to help implement and test the fix: extracting a single `allocateBudget` function used by both the campaign overview and the submission list queries, so displayed spend and per-submission earnings are always derived from the same allocation and never exceed budget. I wrote up the remaining root cause (ingestion not stopping on campaign completion) in "Known limitation" above rather than treating this as a full fix.
 
 The final implementation was manually verified with:
 

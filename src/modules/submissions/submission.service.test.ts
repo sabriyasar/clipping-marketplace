@@ -3,10 +3,12 @@ import { describe, expect, it } from "vitest";
 
 import { db } from "@/db";
 import { campaigns, submissionMetrics, submissions, users } from "@/db/schema";
+import { getCampaignOverview } from "../campaigns/campaign.service";
 import {
   approveSubmission,
   createSubmission,
   listMySubmissions,
+  listSubmissionsByCampaign,
   rejectSubmission,
 } from "./submission.service";
 
@@ -306,6 +308,86 @@ describe("approveSubmission", () => {
 
     expect(creatorASubmissions).toHaveLength(1);
     expect(creatorASubmissions[0].id).toBe(submissionA.id);
+  });
+
+  it("keeps displayed earnings consistent with the campaign overview's spent, even after post-approval view growth pushes the raw payout over budget", async () => {
+    const [creator] = await db
+      .insert(users)
+      .values({
+        email: `earnings-consistency-${crypto.randomUUID()}@example.com`,
+        role: "creator",
+      })
+      .returning();
+
+    const [campaign] = await db
+      .insert(campaigns)
+      .values({
+        title: "Earnings consistency test",
+        platforms: ["tiktok"],
+        payoutPer1kViews: 5,
+        totalBudget: 10,
+        status: "active",
+        startsAt: new Date("2026-09-01T00:00:00.000Z"),
+        endsAt: new Date("2026-09-05T23:59:59.999Z"),
+      })
+      .returning();
+
+    const [submission] = await db
+      .insert(submissions)
+      .values({
+        campaignId: campaign.id,
+        creatorId: creator.id,
+        postUrl: `https://tiktok.com/@test/video/${crypto.randomUUID()}`,
+        platform: "tiktok",
+        status: "pending",
+      })
+      .returning();
+
+    await db.insert(submissionMetrics).values({
+      submissionId: submission.id,
+      capturedAt: "2026-09-01",
+      views: 1_000,
+      likes: 0,
+      comments: 0,
+    });
+
+    await approveSubmission(db, submission.id);
+
+    // Simulate ingest pushing views up after approval, past what the
+    // 10 cent budget can cover (floor(5151/1000)*5 = 25 cents raw).
+    await db.insert(submissionMetrics).values({
+      submissionId: submission.id,
+      capturedAt: "2026-09-02",
+      views: 5_151,
+      likes: 0,
+      comments: 0,
+    });
+
+    const overview = await getCampaignOverview(db, campaign.id);
+    const submissionsByCampaign = await listSubmissionsByCampaign(
+      db,
+      campaign.id,
+    );
+    const creatorSubmissions = await listMySubmissions(db, creator.id);
+
+    expect(overview).not.toBeNull();
+    expect(overview?.spent).toBe(10);
+    expect(overview?.budgetLeft).toBe(0);
+
+    const adminRow = submissionsByCampaign.find(
+      (row) => row.id === submission.id,
+    );
+    const creatorRow = creatorSubmissions.find(
+      (row) => row.id === submission.id,
+    );
+
+    expect(adminRow?.earnings).toBe(10);
+    expect(creatorRow?.earnings).toBe(10);
+
+    // The overview's spent and every displayed earnings figure for this
+    // submission must all agree, and none may exceed total_budget.
+    expect(adminRow?.earnings).toBe(overview?.spent);
+    expect(creatorRow?.earnings).toBe(overview?.spent);
   });
 });
 
