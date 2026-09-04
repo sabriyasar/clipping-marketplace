@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 
+import LogoutButton from "@/components/LogoutButton";
 import { createClient } from "@/trpc/client";
 
 const trpc = createClient();
@@ -64,13 +65,17 @@ export default function CreatorDashboard() {
             </p>
           </div>
 
-          <button
-            type="button"
-            onClick={() => router.push("/creator/submissions")}
-            className="rounded-md border bg-white px-4 py-2 text-sm font-medium hover:bg-gray-50"
-          >
-            My Submissions
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => router.push("/creator/submissions")}
+              className="rounded-md border bg-white px-4 py-2 text-sm font-medium hover:bg-gray-50"
+            >
+              My Submissions
+            </button>
+
+            <LogoutButton />
+          </div>
         </div>
 
         {loading && (

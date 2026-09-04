@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 
+import LogoutButton from "@/components/LogoutButton";
 import { createClient } from "@/trpc/client";
 
 const trpc = createClient();
@@ -73,12 +74,16 @@ export default function AdminDashboard() {
             </p>
           </div>
 
-          <Link
-            href="/admin/campaigns/new"
-            className="inline-flex h-10 items-center justify-center rounded-md bg-black px-4 text-sm font-medium text-white hover:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-black focus:ring-offset-2"
-          >
-            Create Campaign
-          </Link>
+          <div className="flex items-center gap-2">
+            <Link
+              href="/admin/campaigns/new"
+              className="inline-flex h-10 items-center justify-center rounded-md bg-black px-4 text-sm font-medium text-white hover:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-black focus:ring-offset-2"
+            >
+              Create Campaign
+            </Link>
+
+            <LogoutButton />
+          </div>
         </div>
 
         <section className="rounded-xl border bg-white p-6 shadow-sm">
